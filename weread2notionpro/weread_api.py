@@ -9,6 +9,8 @@ from retrying import retry
 from urllib.parse import quote
 from dotenv import load_dotenv
 
+from .cookiecloud_client import CookieCloudClient
+
 load_dotenv()
 WEREAD_URL = "https://weread.qq.com/"
 WEREAD_NOTEBOOKS_URL = "https://i.weread.qq.com/user/notebooks"
@@ -27,49 +29,74 @@ class WeReadApi:
         self.session = requests.Session()
         self.session.cookies = self.parse_cookie_string()
 
-    def try_get_cloud_cookie(self, url, id, password):
-        if url.endswith("/"):
-            url = url[:-1]
-        req_url = f"{url}/get/{id}"
-        data = {"password": password}
-        result = None
-        response = requests.post(req_url, data=data)
-        if response.status_code == 200:
-            data = response.json()
-            cookie_data = data.get("cookie_data")
-            if cookie_data and "weread.qq.com" in cookie_data:
-                cookies = cookie_data["weread.qq.com"]
-                cookie_str = "; ".join(
-                    [f"{cookie['name']}={cookie['value']}" for cookie in cookies]
-                )
-                result = cookie_str
-        return result
+    def get_cookie_from_cloud(self, url, uuid, password):
+        """
+        从 CookieCloud 服务器获取微信读书 Cookie
+
+        Args:
+            url: CookieCloud 服务器地址
+            uuid: 用户 UUID (CC_ID)
+            password: 密码 (CC_PASSWORD)
+
+        Returns:
+            Cookie 字符串
+        """
+        try:
+            client = CookieCloudClient(url=url, uuid=uuid, password=password)
+            return client.get_cookie_string("weread.qq.com")
+        except Exception as e:
+            raise Exception(f"从 CookieCloud 获取 Cookie 失败: {e}")
 
     def get_cookie(self):
+        """
+        获取微信读书 Cookie
+
+        优先级：
+        1. CookieCloud (如果配置了 CC_URL, CC_ID, CC_PASSWORD)
+        2. 环境变量 WEREAD_COOKIE
+        """
         url = os.getenv("CC_URL")
         if not url:
             url = "https://cookiecloud.malinkang.com/"
-        id = os.getenv("CC_ID")
+        uuid = os.getenv("CC_ID")
         password = os.getenv("CC_PASSWORD")
         cookie = os.getenv("WEREAD_COOKIE")
-        if url and id and password:
-            cookie = self.try_get_cloud_cookie(url, id, password)
+
+        # 优先使用 CookieCloud
+        if url and uuid and password:
+            try:
+                cookie = self.get_cookie_from_cloud(url, uuid, password)
+                print("已从 CookieCloud 获取 Cookie")
+            except Exception as e:
+                print(f"从 CookieCloud 获取 Cookie 失败，尝试使用环境变量: {e}")
+                if not cookie or not cookie.strip():
+                    raise Exception("CookieCloud 获取失败且没有设置 WEREAD_COOKIE 环境变量")
+
         if not cookie or not cookie.strip():
-            raise Exception("没有找到cookie，请按照文档填写cookie")
+            raise Exception("没有找到 cookie，请配置 CookieCloud (CC_URL, CC_ID, CC_PASSWORD) 或 WEREAD_COOKIE 环境变量")
         return cookie
 
     def parse_cookie_string(self):
+        """
+        解析 Cookie 字符串为 cookiejar
+
+        修复原问题：原代码使用 unicode_escape 会破坏 URL 编码的 cookie 值
+        现在直接使用原始值，保持 URL 编码格式
+        """
         cookies_dict = {}
-        
+
         # 使用正则表达式解析 cookie 字符串
         pattern = re.compile(r'([^=]+)=([^;]+);?\s*')
         matches = pattern.findall(self.cookie)
-        
+
         for key, value in matches:
-            cookies_dict[key] = value.encode('unicode_escape').decode('ascii')
+            # 直接使用原始值，不进行 unicode_escape 编码
+            # 保持 URL 编码格式（如 %2C, %7B 等）
+            cookies_dict[key] = value
+
         # 直接使用 cookies_dict 创建 cookiejar
         cookiejar = cookiejar_from_dict(cookies_dict)
-        
+
         return cookiejar
 
     def get_bookshelf(self):
@@ -83,9 +110,9 @@ class WeReadApi:
             errcode = r.json().get("errcode",0)
             self.handle_errcode(errcode)
             raise Exception(f"Could not get bookshelf {r.text}")
-        
-    def handle_errcode(self,errcode):
-        if( errcode== -2012 or errcode==-2010):
+
+    def handle_errcode(self, errcode):
+        if errcode == -2012 or errcode == -2010:
             print(f"::error::微信读书Cookie过期了，请参考文档重新设置。https://mp.weixin.qq.com/s/B_mqLUZv7M1rmXRsMlBf7A")
 
     @retry(stop_max_attempt_number=3, wait_fixed=5000)
@@ -99,7 +126,7 @@ class WeReadApi:
             books.sort(key=lambda x: x["sort"])
             return books
         else:
-            errcode = r.json().get("errcode",0)
+            errcode = r.json().get("errcode", 0)
             self.handle_errcode(errcode)
             raise Exception(f"Could not get notebook list {r.text}")
 
@@ -112,7 +139,7 @@ class WeReadApi:
         if r.ok:
             return r.json()
         else:
-            errcode = r.json().get("errcode",0)
+            errcode = r.json().get("errcode", 0)
             self.handle_errcode(errcode)
             print(f"Could not get book info {r.text}")
 
@@ -123,12 +150,13 @@ class WeReadApi:
         params = dict(bookId=bookId)
         r = self.session.get(WEREAD_BOOKMARKLIST_URL, params=params)
         if r.ok:
-            with open("bookmark.json","w") as f:
-                f.write(json.dumps(r.json(),indent=4,ensure_ascii=False))
+            # 调试时可以写入文件，但在 CI/CD 环境中可能导致问题
+            # with open("bookmark.json","w") as f:
+            #     f.write(json.dumps(r.json(),indent=4,ensure_ascii=False))
             bookmarks = r.json().get("updated")
             return bookmarks
         else:
-            errcode = r.json().get("errcode",0)
+            errcode = r.json().get("errcode", 0)
             self.handle_errcode(errcode)
             raise Exception(f"Could not get {bookId} bookmark list")
 
@@ -152,11 +180,11 @@ class WeReadApi:
             "osver":"12",
             "User-Agent": "WeRead/8.2.5 WRBrand/xiaomi Dalvik/2.1.0 (Linux; U; Android 12; Redmi Note 7 Pro Build/SQ3A.220705.004)",
         }
-        r = self.session.get(WEREAD_READ_INFO_URL,headers=headers, params=params)
+        r = self.session.get(WEREAD_READ_INFO_URL, headers=headers, params=params)
         if r.ok:
             return r.json()
         else:
-            errcode = r.json().get("errcode",0)
+            errcode = r.json().get("errcode", 0)
             self.handle_errcode(errcode)
             raise Exception(f"get {bookId} read info failed {r.text}")
 
@@ -174,24 +202,22 @@ class WeReadApi:
             ]
             return reviews
         else:
-            errcode = r.json().get("errcode",0)
+            errcode = r.json().get("errcode", 0)
             self.handle_errcode(errcode)
             raise Exception(f"get {bookId} review list failed {r.text}")
 
 
 
-    
     def get_api_data(self):
         self.session.get(WEREAD_URL)
         r = self.session.get(WEREAD_HISTORY_URL)
         if r.ok:
             return r.json()
         else:
-            errcode = r.json().get("errcode",0)
+            errcode = r.json().get("errcode", 0)
             self.handle_errcode(errcode)
             raise Exception(f"get history data failed {r.text}")
 
-    
 
     @retry(stop_max_attempt_number=3, wait_fixed=5000)
     def get_chapter_info(self, bookId):
