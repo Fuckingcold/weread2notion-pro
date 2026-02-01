@@ -9,7 +9,7 @@ setup(
         "retrying",
         "notion-client",
         "github-heatmap",
-        "github-heatmap",
+        "pycryptodome",
     ],
     entry_points={
         "console_scripts": [
