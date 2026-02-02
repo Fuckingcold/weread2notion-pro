@@ -11,6 +11,7 @@ import json
 import os
 import re
 import time
+import hashlib
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 
@@ -149,17 +150,9 @@ class WeReadApiV2:
         """
         获取微信读书 Cookie
 
-        优先级：
-        1. 环境变量 WEREAD_COOKIE
-        2. CookieCloud (如果配置了 CC_URL, CC_ID, CC_PASSWORD)
+        只使用 CookieCloud 获取 Cookie
         """
-        # 1. 检查环境变量中的直接 Cookie
-        env_cookie = os.getenv("WEREAD_COOKIE")
-        if env_cookie and env_cookie.strip():
-            print("[Cookie] 使用环境变量中的直接 Cookie")
-            return env_cookie.strip()
-
-        # 2. 尝试环境变量中的 Cookie Cloud 配置
+        # 尝试环境变量中的 Cookie Cloud 配置
         env_url = os.getenv("CC_URL")
         if not env_url:
             env_url = "https://cookiecloud.malinkang.com/"
@@ -175,7 +168,7 @@ class WeReadApiV2:
             except Exception as e:
                 print(f"[Cookie] 使用 CookieCloud 获取 Cookie 失败: {e}")
 
-        raise Exception("没有找到 cookie，请配置 WEREAD_COOKIE 或 CookieCloud")
+        raise Exception("没有找到 cookie，请配置 CookieCloud 环境变量 (CC_URL, CC_ID, CC_PASSWORD)")
 
     def handle_errcode(self, errcode: int):
         """处理错误码"""
@@ -269,13 +262,26 @@ class WeReadApiV2:
 
     def get_bookshelf(self) -> Dict[str, Any]:
         """
-        获取书架数据（存在笔记的书籍）
+        获取完整书架数据（包含 bookProgress、archive、books）
 
-        使用 WEREAD_NOTEBOOKS_URL 获取有笔记的书籍
+        使用 i.weread.qq.com/shelf/sync 获取完整书架数据
+        与 weread_api.py 的 get_bookshelf() 保持兼容
         """
         def _request():
-            data = self.make_api_request(WEREAD_NOTEBOOKS_URL, "get")
-            return data
+            # 首先访问主页，确保会话有效
+            self.visit_homepage()
+
+            # 使用 i.weread.qq.com/shelf/sync 接口获取完整书架数据
+            url = "https://i.weread.qq.com/shelf/sync?synckey=0&teenmode=0&album=1&onlyBookid=0"
+            response = self.session.get(url, timeout=60)
+
+            if response.ok:
+                data = response.json()
+                return data
+            else:
+                errcode = response.json().get("errcode", 0)
+                self.handle_errcode(errcode)
+                raise Exception(f"获取书架失败: {response.text}")
 
         return self._retry(_request)
 
@@ -288,6 +294,25 @@ class WeReadApiV2:
         def _request():
             data = self.make_api_request(WEREAD_SHELF_SYNC_URL, "get")
             return data
+
+        return self._retry(_request)
+
+    def get_api_data(self) -> Dict[str, Any]:
+        """
+        获取历史阅读数据
+
+        使用 i.weread.qq.com/readdata/summary 接口
+        与 weread_api.py 的 get_api_data() 保持兼容
+        """
+        def _request():
+            url = "https://i.weread.qq.com/readdata/summary?synckey=0"
+            response = self.session.get(url, timeout=60)
+            if response.ok:
+                return response.json()
+            else:
+                errcode = response.json().get("errcode", 0)
+                self.handle_errcode(errcode)
+                raise Exception(f"获取历史阅读数据失败: {response.text}")
 
         return self._retry(_request)
 
@@ -469,6 +494,47 @@ class WeReadApiV2:
                 raise
 
         return self._retry(_request)
+
+    def calculate_book_str_id(self, book_id):
+        """计算书籍字符串 ID（用于生成微信读书阅读链接）"""
+        id_length = len(book_id)
+        if re.match(r"^\d*$", book_id):
+            ary = []
+            for i in range(0, id_length, 9):
+                ary.append(format(int(book_id[i:min(i + 9, id_length)]), "x"))
+            return "3", ary
+
+        result = ""
+        for i in range(id_length):
+            result += format(ord(book_id[i]), "x")
+        return "4", [result]
+
+    def get_url(self, book_id: str) -> str:
+        """获取微信读书阅读链接"""
+        md5 = hashlib.md5()
+        md5.update(book_id.encode("utf-8"))
+        digest = md5.hexdigest()
+        result = digest[0:3]
+        code, transformed_ids = self.calculate_book_str_id(book_id)
+        result += code + "2" + digest[-2:]
+
+        for i in range(len(transformed_ids)):
+            hex_length_str = format(len(transformed_ids[i]), "x")
+            if len(hex_length_str) == 1:
+                hex_length_str = "0" + hex_length_str
+
+            result += hex_length_str + transformed_ids[i]
+
+            if i < len(transformed_ids) - 1:
+                result += "g"
+
+        if len(result) < 20:
+            result += digest[0:20 - len(result)]
+
+        md5 = hashlib.md5()
+        md5.update(result.encode("utf-8"))
+        result += md5.hexdigest()[0:3]
+        return f"https://weread.qq.com/web/reader/{result}"
 
 
 # 便捷函数：获取实例
