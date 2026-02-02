@@ -42,9 +42,14 @@ class WeReadApi:
             Cookie 字符串
         """
         try:
+            print(f"正在从 CookieCloud 获取 Cookie...")
+            print(f"服务器: {url}")
+            print(f"UUID: {uuid[:10] if uuid else None}")
+
             client = CookieCloudClient(url=url, uuid=uuid, password=password)
             return client.get_cookie_string("weread.qq.com")
         except Exception as e:
+            print(f"从 CookieCloud 获取 Cookie 失败: {e}")
             raise Exception(f"从 CookieCloud 获取 Cookie 失败: {e}")
 
     def get_cookie(self):

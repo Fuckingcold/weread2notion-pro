@@ -103,6 +103,7 @@ class CookieCloudClient:
 
         try:
             data = response.json()
+            print(f"CookieCloud 返回的数据结构: {type(data)} - {list(data.keys()) if isinstance(data, dict) else 'Not a dict'}")
         except json.JSONDecodeError:
             raise Exception(f"CookieCloud 返回的不是有效的 JSON: {response.text}")
 
@@ -112,19 +113,32 @@ class CookieCloudClient:
             if self.password:
                 try:
                     decrypted_data = self._decrypt(encrypted_data, self.password)
-                    cookie_data = json.loads(decrypted_data)
+                    # 如果 decrypted_data 已经是 dict，直接使用
+                    if isinstance(decrypted_data, dict):
+                        cookie_data = decrypted_data
+                    else:
+                        # 如果是字符串，解析为 JSON
+                        cookie_data = json.loads(decrypted_data)
                 except Exception as e:
-                    raise Exception(f"解密 Cookie 数据失败: {e}")
-            else:
-                # 如果没有提供密码，假设数据未加密
-                try:
-                    # 尝试直接 base64 解码
-                    cookie_data = json.loads(base64.b64decode(encrypted_data).decode('utf-8'))
-                except:
+                    # 如果解密失败，尝试直接解析
                     try:
-                        cookie_data = json.loads(encrypted_data)
+                        cookie_data = data
                     except:
-                        raise Exception("需要提供密码来解密 Cookie 数据")
+                        raise Exception(f"解密 Cookie 数据失败: {e}")
+            else:
+                # 如果没有提供密码，尝试解析数据
+                if isinstance(encrypted_data, dict):
+                    cookie_data = encrypted_data
+                elif isinstance(encrypted_data, str):
+                    try:
+                        # 尝试直接 base64 解码
+                        cookie_data = json.loads(base64.b64decode(encrypted_data).decode('utf-8'))
+                    except:
+                        try:
+                            cookie_data = json.loads(encrypted_data)
+                        except:
+                            # 尝试不解析，直接返回原始数据
+                            cookie_data = data
         else:
             # 如果没有 cookie_data 字段，直接返回整个响应
             cookie_data = data
