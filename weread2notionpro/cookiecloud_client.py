@@ -75,6 +75,38 @@ class CookieCloudClient:
 
         return decrypted.decode('utf-8')
 
+    def _find_domain_key(self, domain: str, cookie_data: Dict) -> str:
+        """
+        在 cookie_data 中查找匹配的域名键
+
+        支持的域名格式：
+        - weread.qq.com (精确匹配)
+        - .weread.qq.com (子域名通配)
+        - www.weread.qq.com (完整子域名)
+
+        Args:
+            domain: 要查找的域名，如 weread.qq.com
+            cookie_data: cookie 数据字典
+
+        Returns:
+            匹配的域名键，如果没有找到返回 None
+        """
+        # 精确匹配
+        if domain in cookie_data:
+            return domain
+
+        # 尝试带点前缀的格式（如 .weread.qq.com）
+        with_dot = f".{domain}"
+        if with_dot in cookie_data:
+            return with_dot
+
+        # 遍历所有键，查找包含该域名的键
+        for key in cookie_data.keys():
+            if key == domain or key == with_dot or key.endswith(domain):
+                return key
+
+        return None
+
     def get_cookies(self, domain: str = None) -> Dict:
         """
         从 CookieCloud 服务器获取 Cookie
@@ -107,45 +139,43 @@ class CookieCloudClient:
         except json.JSONDecodeError:
             raise Exception(f"CookieCloud 返回的不是有效的 JSON: {response.text}")
 
-        # 解密数据（如果服务器返回加密数据）
-        encrypted_data = data.get("cookie_data")
-        if encrypted_data:
-            if self.password:
-                try:
-                    decrypted_data = self._decrypt(encrypted_data, self.password)
-                    # 如果 decrypted_data 已经是 dict，直接使用
-                    if isinstance(decrypted_data, dict):
-                        cookie_data = decrypted_data
-                    else:
-                        # 如果是字符串，解析为 JSON
-                        cookie_data = json.loads(decrypted_data)
-                except Exception as e:
-                    # 如果解密失败，尝试直接解析
-                    try:
-                        cookie_data = data
-                    except:
-                        raise Exception(f"解密 Cookie 数据失败: {e}")
-            else:
-                # 如果没有提供密码，尝试解析数据
-                if isinstance(encrypted_data, dict):
-                    cookie_data = encrypted_data
-                elif isinstance(encrypted_data, str):
-                    try:
-                        # 尝试直接 base64 解码
-                        cookie_data = json.loads(base64.b64decode(encrypted_data).decode('utf-8'))
-                    except:
-                        try:
-                            cookie_data = json.loads(encrypted_data)
-                        except:
-                            # 尝试不解析，直接返回原始数据
-                            cookie_data = data
-        else:
-            # 如果没有 cookie_data 字段，直接返回整个响应
+        # 获取 cookie_data 数据
+        cookie_data = data.get("cookie_data")
+
+        if not cookie_data:
+            print(f"警告：没有找到 cookie_data 字段，完整数据: {data}")
+            # 如果没有 cookie_data，尝试直接使用整个响应
             cookie_data = data
 
+        # 如果 cookie_data 是字符串，尝试解析
+        if isinstance(cookie_data, str):
+            try:
+                # 如果有密码，尝试解密
+                if self.password:
+                    cookie_data = self._decrypt(cookie_data, self.password)
+                    if isinstance(cookie_data, str):
+                        cookie_data = json.loads(cookie_data)
+                else:
+                    # 没有密码，尝试 base64 解码
+                    cookie_data = json.loads(base64.b64decode(cookie_data).decode('utf-8'))
+            except:
+                try:
+                    cookie_data = json.loads(cookie_data)
+                except:
+                    raise Exception(f"无法解析 cookie_data 数据: {cookie_data}")
+
+        print(f"解析后的 cookie_data: {list(cookie_data.keys()) if isinstance(cookie_data, dict) else 'Not a dict'}")
+
+        # 如果 cookie_data 不是字典，返回原始数据
+        if not isinstance(cookie_data, dict):
+            raise Exception(f"cookie_data 格式错误，期望 dict，实际 {type(cookie_data)}")
+
         # 如果指定了域名，只返回该域名的 Cookie
-        if domain and domain in cookie_data:
-            return {domain: cookie_data[domain]}
+        if domain:
+            matched_key = self._find_domain_key(domain, cookie_data)
+            if matched_key:
+                return {matched_key: cookie_data[matched_key]}
+            raise Exception(f"CookieCloud 中没有找到 {domain} 的 Cookie，可用域名: {list(cookie_data.keys())}")
 
         return cookie_data
 
@@ -183,10 +213,12 @@ class CookieCloudClient:
         """
         cookies_data = self.get_cookies(domain)
 
-        if domain not in cookies_data:
-            raise Exception(f"CookieCloud 中没有找到 {domain} 的 Cookie")
+        # 使用 _find_domain_key 查找匹配的域名
+        matched_key = self._find_domain_key(domain, cookies_data)
+        if not matched_key:
+            raise Exception(f"CookieCloud 中没有找到 {domain} 的 Cookie，可用域名: {list(cookies_data.keys())}")
 
-        cookies = cookies_data[domain]
+        cookies = cookies_data[matched_key]
         return {cookie['name']: cookie['value'] for cookie in cookies}
 
 
