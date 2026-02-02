@@ -334,7 +334,11 @@ class NotionHelper:
         if key in self.__cache:
             return self.__cache.get(key)
         filter = {"property": "标题", "title": {"equals": name}}
-        response = self.client.databases.query(database_id=id, filter=filter)
+        response = self.client.request(
+            path=f"databases/{id}/query",
+            method="POST",
+            body={"filter": filter}
+        )
         if len(response.get("results")) == 0:
             parent = {"database_id": id, "type": "database_id"}
             properties["标题"] = get_title(name)
@@ -434,7 +438,12 @@ class NotionHelper:
     @retry(stop_max_attempt_number=3, wait_fixed=5000)
     def query(self, **kwargs):
         kwargs = {k: v for k, v in kwargs.items() if v}
-        return self.client.databases.query(**kwargs)
+        database_id = kwargs.pop("database_id")
+        return self.client.request(
+            path=f"databases/{database_id}/query",
+            method="POST",
+            body=kwargs
+        )
 
     @retry(stop_max_attempt_number=3, wait_fixed=5000)
     def get_block_children(self, id):
@@ -493,11 +502,13 @@ class NotionHelper:
         has_more = True
         start_cursor = None
         while has_more:
-            response = self.client.databases.query(
-                database_id=database_id,
-                filter=filter,
-                start_cursor=start_cursor,
-                page_size=100,
+            body = {"filter": filter, "page_size": 100}
+            if start_cursor:
+                body["start_cursor"] = start_cursor
+            response = self.client.request(
+                path=f"databases/{database_id}/query",
+                method="POST",
+                body=body
             )
             start_cursor = response.get("next_cursor")
             has_more = response.get("has_more")
@@ -511,10 +522,13 @@ class NotionHelper:
         has_more = True
         start_cursor = None
         while has_more:
-            response = self.client.databases.query(
-                database_id=database_id,
-                start_cursor=start_cursor,
-                page_size=100,
+            body = {"page_size": 100}
+            if start_cursor:
+                body["start_cursor"] = start_cursor
+            response = self.client.request(
+                path=f"databases/{database_id}/query",
+                method="POST",
+                body=body
             )
             start_cursor = response.get("next_cursor")
             has_more = response.get("has_more")
