@@ -191,10 +191,12 @@ class CookieCloudClient:
         """
         cookies_data = self.get_cookies(domain)
 
-        if domain not in cookies_data:
-            raise Exception(f"CookieCloud 中没有找到 {domain} 的 Cookie")
+        # 使用 _find_domain_key 查找匹配的域名键
+        matched_key = self._find_domain_key(domain, cookies_data)
+        if not matched_key:
+            raise Exception(f"CookieCloud 中没有找到 {domain} 的 Cookie，可用域名: {list(cookies_data.keys())}")
 
-        cookies = cookies_data[domain]
+        cookies = cookies_data[matched_key]
         cookie_str = "; ".join(
             [f"{cookie['name']}={cookie['value']}" for cookie in cookies]
         )
