@@ -131,15 +131,24 @@ class NotionHelper:
             if "has_children" in child and child["has_children"]:
                 self.search_database(child["id"])
 
+
     def get_data_source_id(self, database_id):
         """获取数据库对应的 data source ID"""
         if database_id is None:
             return None
         if database_id in self.data_source_id_dict:
             return self.data_source_id_dict[database_id]
-        # In Notion 2025 API, database_id is the same as data_source_id for the default data source
-        self.data_source_id_dict[database_id] = database_id
-        return database_id
+        # In Notion 2025 API, database_id is not the same as data_source_id
+        # We need to retrieve the database to get its default data source ID
+        try:
+            db = self.client.databases.retrieve(database_id=database_id)
+            # The database response should contain data source information
+            data_source_id = db.get("data_source_id") or db.get("id")
+            self.data_source_id_dict[database_id] = data_source_id
+            return data_source_id
+        except Exception as e:
+            print(f"Error retrieving database {database_id}: {e}")
+            return None
 
     def update_book_database(self):
         """更新数据库"""
@@ -221,8 +230,10 @@ class NotionHelper:
             }
         )
         self.read_database_id = database_result.get("id")
-        # Store the data source ID (same as database ID for default data source)
-        self.data_source_id_dict[self.read_database_id] = self.read_database_id
+        # In Notion 2025 API, the result contains both database and data source info
+        # The default data source ID is returned in the response
+        data_source_id = database_result.get("data_source", {}).get("id") or self.read_database_id
+        self.data_source_id_dict[self.read_database_id] = data_source_id
 
     def create_setting_database(self):
         title = [
@@ -279,8 +290,10 @@ class NotionHelper:
             }
         )
         self.setting_database_id = database_result.get("id")
-        # Store the data source ID (same as database ID for default data source)
-        self.data_source_id_dict[self.setting_database_id] = self.setting_database_id
+        # In Notion 2025 API, the result contains both database and data source info
+        # The default data source ID is returned in the response
+        data_source_id = database_result.get("data_source", {}).get("id") or self.setting_database_id
+        self.data_source_id_dict[self.setting_database_id] = data_source_id
 
     def insert_to_setting_database(self):
         existing_pages = self.query(database_id=self.setting_database_id, filter={"property": "标题", "title": {"equals": "设置"}}).get("results")
