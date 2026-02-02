@@ -132,9 +132,15 @@ class NotionHelper:
 
     def update_book_database(self):
         """更新数据库"""
+        if self.book_database_id is None:
+            print(f"警告：未找到书架数据库，请检查 Notion 页面中是否存在 '{self.database_name_dict.get('BOOK_DATABASE_NAME')}' 数据库")
+            return
         response = self.client.databases.retrieve(database_id=self.book_database_id)
         id = response.get("id")
         properties = response.get("properties")
+        if properties is None:
+            print(f"警告：无法获取数据库的 properties 字段，database_id: {self.book_database_id}")
+            return
         update_properties = {}
         if (
             properties.get("阅读时长") is None
