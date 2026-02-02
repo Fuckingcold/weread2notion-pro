@@ -47,6 +47,7 @@ class NotionHelper:
         "SETTING_DATABASE_NAME": "设置",
     }
     database_id_dict = {}
+    data_source_id_dict = {}  # database_id -> data_source_id mapping
     heatmap_block_id = None
     show_color = True
     block_type = "callout"
@@ -130,6 +131,16 @@ class NotionHelper:
             if "has_children" in child and child["has_children"]:
                 self.search_database(child["id"])
 
+    def get_data_source_id(self, database_id):
+        """获取数据库对应的 data source ID"""
+        if database_id is None:
+            return None
+        if database_id in self.data_source_id_dict:
+            return self.data_source_id_dict[database_id]
+        # In Notion 2025 API, database_id is the same as data_source_id for the default data source
+        self.data_source_id_dict[database_id] = database_id
+        return database_id
+
     def update_book_database(self):
         """更新数据库"""
         if self.book_database_id is None:
@@ -193,13 +204,26 @@ class NotionHelper:
             },
         }
         parent = parent = {"page_id": self.page_id, "type": "page_id"}
-        self.read_database_id = self.client.databases.create(
+        # Create database with initial data source
+        database_result = self.client.databases.create(
             parent=parent,
             title=title,
             icon=get_icon("https://www.notion.so/icons/target_gray.svg"),
             properties=properties,
-        ).get("id")    
-        
+            initial_data_source={
+                "title": [
+                    {
+                        "type": "text",
+                        "text": {"content": self.database_name_dict.get("READ_DATABASE_NAME")},
+                    }
+                ],
+                "properties": properties,
+            }
+        )
+        self.read_database_id = database_result.get("id")
+        # Store the data source ID (same as database ID for default data source)
+        self.data_source_id_dict[self.read_database_id] = self.read_database_id
+
     def create_setting_database(self):
         title = [
             {
@@ -238,12 +262,25 @@ class NotionHelper:
             "最后同步时间": {"date": {}},
         }
         parent = parent = {"page_id": self.page_id, "type": "page_id"}
-        self.setting_database_id = self.client.databases.create(
+        # Create database with initial data source
+        database_result = self.client.databases.create(
             parent=parent,
             title=title,
             icon=get_icon("https://www.notion.so/icons/gear_gray.svg"),
             properties=properties,
-        ).get("id")
+            initial_data_source={
+                "title": [
+                    {
+                        "type": "text",
+                        "text": {"content": self.database_name_dict.get("SETTING_DATABASE_NAME")},
+                    }
+                ],
+                "properties": properties,
+            }
+        )
+        self.setting_database_id = database_result.get("id")
+        # Store the data source ID (same as database ID for default data source)
+        self.data_source_id_dict[self.setting_database_id] = self.setting_database_id
 
     def insert_to_setting_database(self):
         existing_pages = self.query(database_id=self.setting_database_id, filter={"property": "标题", "title": {"equals": "设置"}}).get("results")
@@ -334,10 +371,13 @@ class NotionHelper:
         if key in self.__cache:
             return self.__cache.get(key)
         filter = {"property": "标题", "title": {"equals": name}}
-        response = self.client.request(
-            path=f"databases/{id}/query",
-            method="POST",
-            body={"filter": filter}
+        # In Notion 2025 API, query data sources instead of databases
+        data_source_id = self.get_data_source_id(id)
+        if data_source_id is None:
+            return None
+        response = self.client.data_sources.query(
+            data_source_id=data_source_id,
+            filter=filter
         )
         if len(response.get("results")) == 0:
             parent = {"database_id": id, "type": "database_id"}
@@ -439,11 +479,12 @@ class NotionHelper:
     def query(self, **kwargs):
         kwargs = {k: v for k, v in kwargs.items() if v}
         database_id = kwargs.pop("database_id")
-        return self.client.request(
-            path=f"databases/{database_id}/query",
-            method="POST",
-            body=kwargs
-        )
+        # In Notion 2025 API, query data sources instead of databases
+        data_source_id = self.get_data_source_id(database_id)
+        if data_source_id is None:
+            # Return empty results if no data source found
+            return {"results": [], "next_cursor": None, "has_more": False}
+        return self.client.data_sources.query(data_source_id=data_source_id, **kwargs)
 
     @retry(stop_max_attempt_number=3, wait_fixed=5000)
     def get_block_children(self, id):
@@ -501,15 +542,15 @@ class NotionHelper:
         results = []
         has_more = True
         start_cursor = None
+        data_source_id = self.get_data_source_id(database_id)
+        if data_source_id is None:
+            return results
         while has_more:
-            body = {"filter": filter, "page_size": 100}
+            kwargs = {"filter": filter, "page_size": 100}
             if start_cursor:
-                body["start_cursor"] = start_cursor
-            response = self.client.request(
-                path=f"databases/{database_id}/query",
-                method="POST",
-                body=body
-            )
+                kwargs["start_cursor"] = start_cursor
+            # In Notion 2025 API, query data sources instead of databases
+            response = self.client.data_sources.query(data_source_id=data_source_id, **kwargs)
             start_cursor = response.get("next_cursor")
             has_more = response.get("has_more")
             results.extend(response.get("results"))
@@ -521,15 +562,15 @@ class NotionHelper:
         results = []
         has_more = True
         start_cursor = None
+        data_source_id = self.get_data_source_id(database_id)
+        if data_source_id is None:
+            return results
         while has_more:
-            body = {"page_size": 100}
+            kwargs = {"page_size": 100}
             if start_cursor:
-                body["start_cursor"] = start_cursor
-            response = self.client.request(
-                path=f"databases/{database_id}/query",
-                method="POST",
-                body=body
-            )
+                kwargs["start_cursor"] = start_cursor
+            # In Notion 2025 API, query data sources instead of databases
+            response = self.client.data_sources.query(data_source_id=data_source_id, **kwargs)
             start_cursor = response.get("next_cursor")
             has_more = response.get("has_more")
             results.extend(response.get("results"))
