@@ -1,6 +1,6 @@
 import pendulum
 from weread2notionpro.notion_helper import NotionHelper
-from weread2notionpro.weread_api import WeReadApi
+from weread2notionpro.weread_api_v2 import WeReadApiV2 as WeReadApi
 from weread2notionpro import utils
 from weread2notionpro.config import book_properties_type_dict, tz
 

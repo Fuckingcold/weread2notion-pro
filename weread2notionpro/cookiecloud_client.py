@@ -79,10 +79,8 @@ class CookieCloudClient:
         """
         在 cookie_data 中查找匹配的域名键
 
-        支持的域名格式：
-        - weread.qq.com (精确匹配)
-        - .weread.qq.com (子域名通配)
-        - www.weread.qq.com (完整子域名)
+        只匹配带点前缀的格式 (如 .weread.qq.com)，这种格式包含完整的 Cookie
+        适用于所有子域名。
 
         Args:
             domain: 要查找的域名，如 weread.qq.com
@@ -91,19 +89,10 @@ class CookieCloudClient:
         Returns:
             匹配的域名键，如果没有找到返回 None
         """
-        # 精确匹配
-        if domain in cookie_data:
-            return domain
-
-        # 尝试带点前缀的格式（如 .weread.qq.com）
+        # 只匹配带点前缀的格式（如 .weread.qq.com）
         with_dot = f".{domain}"
         if with_dot in cookie_data:
             return with_dot
-
-        # 遍历所有键，查找包含该域名的键
-        for key in cookie_data.keys():
-            if key == domain or key == with_dot or key.endswith(domain):
-                return key
 
         return None
 

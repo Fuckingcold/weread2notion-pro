@@ -106,6 +106,8 @@ class NotionHelper:
 
     def extract_page_id(self, notion_url):
         # 正则表达式匹配 32 个字符的 Notion page_id
+        if not notion_url:
+            raise ValueError(f"NOTION_PAGE 环境变量未设置或为空")
         match = re.search(
             r"([a-f0-9]{32}|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})",
             notion_url,
@@ -113,7 +115,7 @@ class NotionHelper:
         if match:
             return match.group(0)
         else:
-            raise Exception(f"获取NotionID失败，请检查输入的Url是否正确")
+            raise Exception(f"获取NotionID失败，请检查输入的Url是否正确: {notion_url}")
 
     def search_database(self, block_id):
         children = self.client.blocks.children.list(block_id=block_id)["results"]
@@ -133,17 +135,28 @@ class NotionHelper:
 
 
     def get_data_source_id(self, database_id):
-        """获取数据库对应的 data source ID"""
+        """获取数据库对应的 data source ID
+        Notion 2025 API: database 包含 data_sources 数组，需要从中获取第一个 data source 的 ID
+        """
         if database_id is None:
             return None
         if database_id in self.data_source_id_dict:
             return self.data_source_id_dict[database_id]
-        # In Notion 2025 API, database_id is not the same as data_source_id
-        # We need to retrieve the database to get its default data source ID
         try:
+            # 检查是否已经是 data source ID（32 位字符串）
+            if "-" not in database_id and len(database_id) == 32:
+                self.data_source_id_dict[database_id] = database_id
+                return database_id
+
             db = self.client.databases.retrieve(database_id=database_id)
-            # The database response should contain data source information
-            data_source_id = db.get("data_source_id") or db.get("id")
+            # Notion 2025 API: database 包含 data_sources 数组
+            data_sources = db.get("data_sources", [])
+            if data_sources:
+                # 获取第一个 data source 的 ID
+                data_source_id = data_sources[0].get("id")
+            else:
+                # 如果没有 data_sources，可能是旧版 API，使用 database_id
+                data_source_id = db.get("id")
             self.data_source_id_dict[database_id] = data_source_id
             return data_source_id
         except Exception as e:
@@ -155,12 +168,28 @@ class NotionHelper:
         if self.book_database_id is None:
             print(f"警告：未找到书架数据库，请检查 Notion 页面中是否存在 '{self.database_name_dict.get('BOOK_DATABASE_NAME')}' 数据库")
             return
-        response = self.client.databases.retrieve(database_id=self.book_database_id)
-        id = response.get("id")
-        properties = response.get("properties")
-        if properties is None:
-            print(f"警告：无法获取数据库的 properties 字段，database_id: {self.book_database_id}")
+
+        # 获取 data source ID
+        data_source_id = self.get_data_source_id(self.book_database_id)
+        if data_source_id is None:
+            print(f"警告：无法获取数据源的 data source ID，database_id: {self.book_database_id}")
             return
+
+        # Notion 2025 API: properties 在 data source 层面
+        try:
+            data_source = self.client.data_sources.retrieve(data_source_id=data_source_id)
+            properties = data_source.get("properties", {})
+        except Exception as e:
+            # 如果 data_sources.retrieve 失败，尝试旧的方式
+            print(f"尝试从 database 获取 properties: {e}")
+            db_response = self.client.databases.retrieve(database_id=self.book_database_id)
+            properties = db_response.get("properties", {})
+
+        if not properties:
+            print(f"警告：无法获取 properties 字段，data_source_id: {data_source_id}")
+            return
+
+        # 检查需要添加的属性
         update_properties = {}
         if (
             properties.get("阅读时长") is None
@@ -187,9 +216,15 @@ class NotionHelper:
             or properties.get("豆瓣短评").get("type") != "rich_text"
         ):
             update_properties["豆瓣短评"] = {"rich_text": {}}
-        """NeoDB先不添加了，现在受众还不广，可能有的小伙伴不知道是干什么的"""
+
+        # NeoDB先不添加了，现在受众还不广，可能有的小伙伴不知道是干什么的
         if len(update_properties) > 0:
-            self.client.databases.update(database_id=id, properties=update_properties)
+            try:
+                self.client.data_sources.update(data_source_id=data_source_id, properties=update_properties)
+            except Exception as e:
+                # 如果 data_sources.update 不存在，尝试 databases.update
+                print(f"尝试使用 databases.update: {e}")
+                self.client.databases.update(database_id=self.book_database_id, properties=update_properties)
 
     def create_database(self):
         title = [
