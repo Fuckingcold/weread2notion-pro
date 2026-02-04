@@ -50,7 +50,9 @@ def insert_book_to_notion(books, index, bookId):
     )
     book["开始阅读时间"] = book.get("beginReadingDate")
     book["最后阅读时间"] = book.get("lastReadingDate")
-    cover = book.get("cover").replace("/s_", "/t7_")
+    cover = book.get("cover")
+    if cover and isinstance(cover, str):
+        cover = cover.replace("/s_", "/t7_")
     if not cover or not cover.strip() or not cover.startswith("http"):
         cover = BOOK_ICON_URL
     if bookId not in notion_books:
@@ -158,7 +160,7 @@ notion_books = {}
 def main():
     global notion_books
     global archive_dict
-    bookshelf_books = weread_api.get_bookshelf()
+    bookshelf_books = weread_api.get_entire_shelf()
     notion_books = notion_helper.get_all_book()
     bookProgress = bookshelf_books.get("bookProgress")
     bookProgress = {book.get("bookId"): book for book in bookProgress}

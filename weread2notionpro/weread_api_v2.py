@@ -26,6 +26,7 @@ WEREAD_CHAPTER_INFO_URL = "https://weread.qq.com/web/book/chapterInfos"
 WEREAD_REVIEW_LIST_URL = "https://weread.qq.com/web/review/list"
 WEREAD_READ_INFO_URL = "https://weread.qq.com/web/book/getProgress"
 WEREAD_SHELF_SYNC_URL = "https://weread.qq.com/web/shelf/sync"
+WEREAD_FRIEND_SYNC_URL = "https://weread.qq.com/web/book/syncFriendCommon"
 WEREAD_BEST_REVIEW_URL = "https://weread.qq.com/web/review/list/best"
 
 
@@ -198,7 +199,8 @@ class WeReadApiV2:
         """访问主页，初始化会话"""
         try:
             headers = self.get_standard_headers()
-            requests.get(WEREAD_URL, headers=headers, timeout=30)
+            # 使用 session 请求以保持 Cookie 一致性
+            self.session.get(WEREAD_URL, headers=headers, timeout=30)
             print("[主页] 访问主页成功")
             return True
         except Exception as e:
@@ -262,26 +264,13 @@ class WeReadApiV2:
 
     def get_bookshelf(self) -> Dict[str, Any]:
         """
-        获取完整书架数据（包含 bookProgress、archive、books）
+        获取书架信息（存在笔记的书籍）
 
-        使用 i.weread.qq.com/shelf/sync 获取完整书架数据
-        与 weread_api.py 的 get_bookshelf() 保持兼容
+        使用 WEREAD_NOTEBOOKS_URL API
         """
         def _request():
-            # 首先访问主页，确保会话有效
-            self.visit_homepage()
-
-            # 使用 i.weread.qq.com/shelf/sync 接口获取完整书架数据
-            url = "https://i.weread.qq.com/shelf/sync?synckey=0&teenmode=0&album=1&onlyBookid=0"
-            response = self.session.get(url, timeout=60)
-
-            if response.ok:
-                data = response.json()
-                return data
-            else:
-                errcode = response.json().get("errcode", 0)
-                self.handle_errcode(errcode)
-                raise Exception(f"获取书架失败: {response.text}")
+            data = self.make_api_request(WEREAD_NOTEBOOKS_URL, "get")
+            return data
 
         return self._retry(_request)
 
@@ -293,7 +282,14 @@ class WeReadApiV2:
         """
         def _request():
             data = self.make_api_request(WEREAD_SHELF_SYNC_URL, "get")
-            return data
+            # 确保返回的数据包含必要的字段
+            result = {
+                "books": data.get("books", []),
+                "bookProgress": data.get("bookProgress", []),
+                "archive": data.get("archive", []),
+                "since": data.get("since", 0)
+            }
+            return result
 
         return self._retry(_request)
 
@@ -301,8 +297,11 @@ class WeReadApiV2:
         """
         获取历史阅读数据
 
-        使用 i.weread.qq.com/readdata/summary 接口
-        与 weread_api.py 的 get_api_data() 保持兼容
+        返回数据包含:
+        - readTimes: Dict[int, int] - 每日阅读时长 (timestamp -> duration in seconds)
+        - readTimeData: List - 每日阅读详情
+
+        此方法被 read_time.py 模块使用，用于同步阅读热力图数据到 Notion
         """
         def _request():
             url = "https://i.weread.qq.com/readdata/summary?synckey=0"
@@ -334,25 +333,34 @@ class WeReadApiV2:
         return self._retry(_request)
 
     def get_bookmark_list(self, book_id: str) -> List[Dict[str, Any]]:
-        """获取划线/笔记列表"""
+        """获取书籍的划线记录"""
         def _request():
             data = self.make_api_request(WEREAD_BOOKMARKLIST_URL, "get", params={"bookId": book_id})
+            # 获取 updated 字段
             bookmarks = data.get("updated", [])
-            # 确保每个划线对象格式一致
+            # 确保每个划线对象格式一致，有 markText 和 chapterUid
             bookmarks = [b for b in bookmarks if b.get("markText") and b.get("chapterUid")]
             return bookmarks
 
         return self._retry(_request)
 
     def get_read_info(self, book_id: str) -> Dict[str, Any]:
-        """获取阅读信息"""
+        """获取阅读进度"""
         def _request():
-            return self.make_api_request(WEREAD_READ_INFO_URL, "get", params={"bookId": book_id})
+            data = self.make_api_request(WEREAD_READ_INFO_URL, "get", params={"bookId": book_id})
+            # 确保返回的数据包含必要的字段
+            result = {
+                "readingTime": data.get("readingTime", 0),
+                "readingProgress": data.get("readingProgress", 0),
+                "totalReadDay": data.get("totalReadDay", 0),
+                "bookId": book_id
+            }
+            return result
 
         return self._retry(_request)
 
     def get_review_list(self, book_id: str) -> List[Dict[str, Any]]:
-        """获取书评列表"""
+        """获取笔记/想法列表"""
         def _request():
             data = self.make_api_request(WEREAD_REVIEW_LIST_URL, "get", params={
                 "bookId": book_id,
@@ -363,7 +371,7 @@ class WeReadApiV2:
                 "syncKey": 0
             })
             reviews = data.get("reviews", [])
-            # 转换成正确的格式
+            # 转换成正确的格式 - 每个元素是 {review: {...}}
             reviews = [x.get("review", x) for x in reviews]
 
             # 为书评添加 chapterUid
@@ -434,8 +442,8 @@ class WeReadApiV2:
 
                 body = json.dumps({"bookIds": [book_id]})
 
-                # 使用 session.post 而不是 requests.post，以保持 Cookie 一致性
-                response = self.session.post(url, params=params, headers=headers, data=body, timeout=60)
+                # 使用 requests.post 而不是 session.post，与 TypeScript 实现一致
+                response = requests.post(url, params=params, headers=headers, data=body, timeout=60)
                 data = response.json()
 
                 # 6. 处理多种可能的响应格式
